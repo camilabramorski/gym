@@ -12,7 +12,15 @@
         import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, Timestamp, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuration (DO NOT EDIT THESE VALUES) ---
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" }; // Fallback for local testing
+        const firebaseConfig = {
+          apiKey: "AIzaSyBgHXqoMDwNr7NNakEE96gURF-Jg7hquMI",
+          authDomain: "camila-gym.firebaseapp.com",
+          projectId: "camila-gym",
+          storageBucket: "camila-gym.firebasestorage.app",
+          messagingSenderId: "831139464272",
+          appId: "1:831139464272:web:72b4fec3c5aeb86ecf3d55",
+          measurementId: "G-JQVN8HDJGD"
+        };
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'daily-workout-tracker-camila-v3'; // Updated app ID for clarity
         // --- End Configuration ---
 
