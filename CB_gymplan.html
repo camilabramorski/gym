@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acompanhamento Diário de Treino - Camila</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, Timestamp, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configuration (DO NOT EDIT THESE VALUES) ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" }; // Fallback for local testing
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'daily-workout-tracker-camila-v3'; // Updated app ID for clarity
+        // --- End Configuration ---
+
+        let db, auth, userId, currentWorkoutRef;
+        let dailyExercises = [];
+        let todayWorkoutKey = '';
+
+        const statusOptions = [
+            { value: "Pendente", label: "Pendente ⏳" },
+            { value: "Concluído", label: "Concluído ✅" },
+            { value: "Não Feito", label: "Não Feito ❌" },
+            { value: "Tentou (Difícil)", label: "Tentou (Difícil) ⚠️" }
+        ];
+
+        const workouts = {
+            "Dia 1: Superior A (Foco em Força)": [
+                { id: "supino_reto", name: "Supino Reto (Barra/Halteres)", name_en: "Bench Press (Barbell/Dumbbell)", details: "3-4 séries, 6-10 reps", description_pt: "Deitada num banco, segurar a barra/halteres ao nível do peito. Empurrar para cima até os braços estarem quase esticados. Baixar controladamente." },
+                { id: "remada_curvada", name: "Remada Curvada (Barra/Halteres)", name_en: "Bent-Over Row (Barbell/Dumbbell)", details: "3-4 séries, 6-10 reps", description_pt: "Inclinar o tronco para a frente (costas direitas). Puxar a barra/halteres em direção ao abdômen/anca, apertando as omoplatas. Baixar controladamente." },
+                { id: "desenv_ombros", name: "Desenvolvimento de Ombros (Barra/Halteres)", name_en: "Shoulder Press / Overhead Press (Barbell/Dumbbell)", details: "3-4 séries, 6-10 reps", description_pt: "Sentada ou em pé, barra/halteres ao nível dos ombros. Empurrar para cima até os braços estarem quase esticados. Baixar controladamente." },
+                { id: "barra_fixa_puxada", name: "Barra Fixa (Pull-ups) ou Puxada Alta (Lat Pulldown)", name_en: "Pull-ups or Lat Pulldown", details: "3-4 séries, Máx. (ou 8-10) reps", description_pt: "Pendurada na barra, puxar o corpo para cima até o queixo passar a barra OU sentada na máquina, puxar a barra em direção ao peito." },
+                { id: "fundos_supino_fechado", name: "Fundos (Dips) em Paralelas ou Supino Fechado", name_en: "Dips (Parallel Bars) or Close-Grip Bench Press", details: "3 séries, Máx. (ou 8-12) reps", description_pt: "Apoiar nas paralelas e descer o corpo flexionando os cotovelos OU supino com pegada mais fechada." },
+                { id: "prancha", name: "Prancha (Plank)", name_en: "Plank", details: "3 séries, 45-60 seg.", description_pt: "Apoiar antebraços e pontas dos pés no chão. Corpo reto da cabeça aos calcanhares. Contrair o abdômen e glúteos. Manter a posição." }
+            ],
+            "Dia 2: Inferior A (Foco em Força e Glúteos)": [
+                { id: "agachamento_livre", name: "Agachamento Livre (Barra)", name_en: "Barbell Squat", details: "3-4 séries, 6-10 reps", description_pt: "Barra apoiada nos ombros. Agachar como se fosse sentar, mantendo peito alto e costas direitas. Joelhos seguem a linha dos pés." },
+                { id: "rdl", name: "Levantamento Terra Romeno (RDL)", name_en: "Romanian Deadlift (RDL)", details: "3-4 séries, 8-12 reps", description_pt: "Em pé, barra/halteres à frente das coxas. Leve flexão dos joelhos. Inclinar o tronco à frente, mantendo costas direitas, descendo o peso pelas pernas. Subir contraindo os glúteos." },
+                { id: "elev_pelvica", name: "Elevação Pélvica (Hip Thrust) com Barra", name_en: "Barbell Hip Thrust", details: "3-4 séries, 8-12 reps", description_pt: "Costas apoiadas num banco, pés no chão. Barra sobre a pelve. Elevar a pelve contraindo os glúteos." },
+                { id: "afundo_halteres", name: "Afundo (Lunge) com Halteres", name_en: "Dumbbell Lunge", details: "3 séries, 8-10 (cada lado) reps", description_pt: "Dar um passo à frente e flexionar ambos os joelhos a 90 graus. O joelho de trás quase toca o chão. Impulsionar de volta à posição inicial. Alternar pernas." },
+                { id: "panturrilha_pe", name: "Panturrilha em Pé", name_en: "Standing Calf Raise", details: "3 séries, 10-15 reps", description_pt: "Elevar os calcanhares, ficando na ponta dos pés. Baixar controladamente." },
+                { id: "elev_pernas", name: "Elevação de Pernas (Deitada ou Suspensa)", name_en: "Leg Raise (Lying or Hanging)", details: "3 séries, 12-15 reps", description_pt: "Deitada, elevar as pernas esticadas até 90 graus e baixar sem tocar o chão OU suspensa, elevar as pernas." }
+            ],
+            "Dia 3: Superior B (Foco em Hipertrofia e Braços)": [
+                { id: "supino_inclinado_halteres", name: "Supino Inclinado com Halteres", name_en: "Incline Dumbbell Press", details: "3 séries, 10-15 reps", description_pt: "Deitada num banco inclinado. Empurrar os halteres para cima. Baixar controladamente." },
+                { id: "remada_sentada_polia", name: "Remada Sentada na Polia (neutra/pronada)", name_en: "Seated Cable Row (Neutral/Pronated Grip)", details: "3 séries, 10-15 reps", description_pt: "Sentada na máquina, pés apoiados, costas direitas. Puxar a manopla em direção ao abdômen, apertando as omoplatas." },
+                { id: "elev_lateral_halteres", name: "Elevação Lateral com Halteres", name_en: "Dumbbell Lateral Raise", details: "3 séries, 12-15 reps", description_pt: "Em pé, halteres ao lado do corpo, ligeira flexão dos cotovelos. Elevar os braços lateralmente até à altura dos ombros. Baixar controladamente." },
+                { id: "rosca_direta_ez_halteres", name: "Rosca Direta com Barra EZ ou Halteres", name_en: "EZ Bar Curl or Dumbbell Bicep Curl", details: "3 séries, 10-12 reps", description_pt: "Em pé, flexionar os cotovelos, trazendo a barra/halteres em direção aos ombros." },
+                { id: "triceps_testa_ez_halteres", name: "Tríceps Testa com Barra EZ ou Halteres", name_en: "EZ Bar Skullcrusher or Dumbbell Skullcrusher", details: "3 séries, 10-12 reps", description_pt: "Deitada num banco, baixar a barra/halteres em direção à testa flexionando os cotovelos. Estender os braços." },
+                { id: "crucifixo_invertido", name: "Crucifixo Invertido com Halteres/Máquina", name_en: "Reverse Dumbbell Fly / Reverse Pec Deck", details: "3 séries, 12-15 reps", description_pt: "Inclinada para frente (com halteres) ou sentada na máquina (peck deck invertido), abduzir os braços horizontalmente, apertando as omoplatas." },
+                { id: "abs_obliquo_russian_twist", name: "Abdominal Oblíquo (ex: Russian Twist)", name_en: "Oblique Crunch (e.g., Russian Twist)", details: "3 séries, 15-20 (cada lado) reps", description_pt: "Sentada no chão, inclinar o tronco para trás, joelhos flexionados. Rodar o tronco de um lado para o outro, tocando (ou quase) o peso/mãos no chão ao lado da anca." }
+            ],
+            "Dia 4: Inferior B (Foco em Hipertrofia e Pernas/Celulite)": [
+                { id: "leg_press", name: "Leg Press", name_en: "Leg Press", details: "3 séries, 10-15 reps", description_pt: "Sentada na máquina, pés na plataforma à largura dos ombros. Empurrar a plataforma estendendo os joelhos (sem travar). Baixar controladamente." },
+                { id: "cadeira_extensora", name: "Cadeira Extensora", name_en: "Leg Extension", details: "3 séries, 12-15 reps", description_pt: "Sentada na máquina, tornozelos sob o apoio. Estender os joelhos levantando o peso. Baixar controladamente." },
+                { id: "mesa_flexora", name: "Mesa Flexora", name_en: "Lying Leg Curl", details: "3 séries, 12-15 reps", description_pt: "Deitada de bruços na máquina, tornozelos sob o apoio. Flexionar os joelhos trazendo os calcanhares em direção aos glúteos. Baixar controladamente." },
+                { id: "agachamento_sumo_halter", name: "Agachamento Sumô com Halter", name_en: "Dumbbell Sumo Squat", details: "3 séries, 12-15 reps", description_pt: "Pés bem afastados, pontas dos pés viradas para fora. Segurar um halter verticalmente junto ao peito. Agachar, mantendo o peito alto e costas direitas. Joelhos seguem a linha dos pés." },
+                { id: "gluteo_polia_coice_caneleira", name: "Glúteo na Polia Baixa (Coice) ou Caneleira", name_en: "Cable Kickback or Ankle Weight Kickback", details: "3 séries, 15-20 (cada lado) reps", description_pt: "Em posição de quatro apoios ou em pé, com o cabo da polia ou caneleira no tornozelo. Estender a perna para trás e para cima, contraindo o glúteo." },
+                { id: "prancha_lateral_elev_perna", name: "Prancha Lateral com Elevação de Perna", name_en: "Side Plank with Leg Raise", details: "3 séries, 10-12 (cada lado) reps", description_pt: "Em prancha lateral (apoiada no antebraço e pé). Elevar e baixar a perna de cima de forma controlada, mantendo o corpo estável." }
+            ],
+            "Dia 5: Corpo Inteiro Metabólico / Core & Glúteos": [
+                { id: "swing_kettlebell_halter", name: "Swing com Kettlebell (ou Halter)", name_en: "Kettlebell Swing (or Dumbbell Swing)", details: "3 séries, 15-20 reps", description_pt: "Pés à largura dos ombros. Segurar o kettlebell/halter com ambas as mãos. Movimento de pêndulo com o quadril (hip hinge), não agachamento. Impulsionar o peso à altura do peito/olhos usando a força dos glúteos e posteriores." },
+                { id: "agachamento_goblet", name: "Agachamento Goblet", name_en: "Goblet Squat", details: "3 séries, 12-15 reps", description_pt: "Segurar um halter verticalmente junto ao peito. Pés à largura dos ombros. Agachar profundamente, mantendo o peito alto e as costas direitas." },
+                { id: "flexoes_braco_pushups", name: "Flexões de Braço (Push-ups) (ou variações)", name_en: "Push-ups (or variations)", details: "3 séries, Máx. reps", description_pt: "Mãos à largura dos ombros ou um pouco mais afastadas. Corpo reto da cabeça aos calcanhares. Baixar o peito em direção ao chão flexionando os cotovelos. Empurrar para cima. (Variações: de joelhos, inclinada)." },
+                { id: "remada_renegada", name: "Remada Renegada (Renegade Row)", name_en: "Renegade Row", details: "3 séries, 8-10 (cada lado) reps", description_pt: "Em posição de prancha com um halter em cada mão. Manter o core firme e o quadril estável. Remar um halter de cada vez em direção à anca. Alternar." },
+                { id: "ponte_gluteos_unilateral", name: "Ponte de Glúteos Unilateral", name_en: "Single-Leg Glute Bridge", details: "3 séries, 12-15 (cada lado) reps", description_pt: "Deitada de barriga para cima, um joelho flexionado e pé no chão, a outra perna esticada ou elevada. Elevar a pelve contraindo o glúteo da perna de apoio." },
+                { id: "abs_bicicleta", name: "Abdominal Bicicleta", name_en: "Bicycle Crunch", details: "3 séries, 20-30 (total) reps", description_pt: "Deitada de barriga para cima, mãos atrás da cabeça (sem puxar). Cotovelo em direção ao joelho oposto, alternando o movimento como se estivesse pedalando." },
+                { id: "superman", name: "Superman", name_en: "Superman Exercise", details: "3 séries, 15-20 reps", description_pt: "Deitada de bruços, braços estendidos à frente. Elevar simultaneamente braços, peito e pernas do chão, contraindo a lombar e glúteos. Manter por um instante e baixar." }
+            ]
+        };
+        
+        const weeklySchedule = {
+            1: "Dia 1: Superior A (Foco em Força)", 
+            2: "Dia 2: Inferior A (Foco em Força e Glúteos)", 
+            3: "Corrida / Descanso Ativo", 
+            4: "Dia 4: Inferior B (Foco em Hipertrofia e Pernas/Celulite)", 
+            5: "Dia 3: Superior B (Foco em Hipertrofia e Braços)", 
+            6: "Dia 5: Corpo Inteiro Metabólico / Core & Glúteos", 
+            0: "Corrida / Descanso" 
+        };
+        
+        function getTodayDateString() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug');
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        console.log("User is signed in:", user.uid);
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `ID Usuário: ${userId}`;
+                        loadDailyWorkout();
+                    } else {
+                        console.log("User is signed out. Attempting to sign in...");
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            try {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                                console.log("Signed in with custom token.");
+                            } catch (error) {
+                                console.error("Error signing in with custom token, trying anonymous:", error);
+                                await signInAnonymously(auth);
+                                console.log("Signed in anonymously after custom token failure.");
+                            }
+                        } else {
+                            await signInAnonymously(auth);
+                            console.log("Signed in anonymously.");
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase initialization error:", error);
+                document.getElementById('workout-title').textContent = "Erro ao conectar ao Firebase.";
+            }
+        }
+
+        function loadDailyWorkout() {
+            const today = new Date();
+            const dayOfWeek = today.getDay(); 
+            const dateString = getTodayDateString();
+            document.getElementById('current-date').textContent = `Data: ${today.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+
+            todayWorkoutKey = weeklySchedule[dayOfWeek];
+            const workoutTitleEl = document.getElementById('workout-title');
+            const exercisesContainer = document.getElementById('exercises-container');
+            const runningInfoEl = document.getElementById('running-info');
+            exercisesContainer.innerHTML = ''; 
+
+            if (workouts[todayWorkoutKey]) {
+                workoutTitleEl.textContent = todayWorkoutKey;
+                runningInfoEl.innerHTML = `<p class="text-sm text-sky-700 bg-sky-100 p-2 rounded-md">🏋️ Dia de treino de força! Você pode adicionar uma corrida, se desejar (ex: Terças são boas para você!).</p>`;
+                if (dayOfWeek === 2) { 
+                     runningInfoEl.innerHTML = `<p class="text-sm text-sky-700 bg-sky-100 p-2 rounded-md">🏋️ Dia de treino de força! Lembre-se que Terça é um dos seus dias preferidos para corrida também! 🏃‍♀️</p>`;
+                }
+
+                dailyExercises = workouts[todayWorkoutKey].map(ex => ({ ...ex, status: "Pendente", notes: "" }));
+                
+                const dailyProgressCollectionPath = `artifacts/${appId}/users/${userId}/dailyProgress`;
+                currentWorkoutRef = doc(db, dailyProgressCollectionPath, dateString);
+
+                onSnapshot(currentWorkoutRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        console.log("Loading existing progress for:", dateString);
+                        const data = docSnap.data();
+                        dailyExercises = dailyExercises.map(templateEx => {
+                            const savedEx = data.exercises.find(saved => saved.id === templateEx.id);
+                            return savedEx ? { ...templateEx, ...savedEx } : templateEx;
+                        });
+                    } else {
+                        console.log("No existing progress for:", dateString, ". Using template.");
+                         dailyExercises = workouts[todayWorkoutKey].map(ex => ({ ...ex, status: "Pendente", notes: "" }));
+                    }
+                    renderExercises();
+                }, (error) => {
+                    console.error("Error fetching daily progress:", error);
+                    dailyExercises = workouts[todayWorkoutKey].map(ex => ({ ...ex, status: "Pendente", notes: "" }));
+                    renderExercises();
+                });
+
+            } else { 
+                workoutTitleEl.textContent = todayWorkoutKey || "Dia de Descanso / Corrida";
+                if (todayWorkoutKey && todayWorkoutKey.toLowerCase().includes("corrida")) {
+                     runningInfoEl.innerHTML = `<p class="text-sm text-emerald-700 bg-emerald-100 p-2 rounded-md">🏃‍♀️ Este é um dia programado para ${todayWorkoutKey}! Aproveite!</p>`;
+                } else {
+                    runningInfoEl.innerHTML = `<p class="text-sm text-gray-600 bg-gray-100 p-2 rounded-md">🧘‍♀️ Aproveite seu dia de descanso ou atividade leve!</p>`;
+                }
+                exercisesContainer.innerHTML = `<p class="text-gray-600 mt-4 text-center">Nenhum treino de força programado para hoje.</p>`;
+                document.getElementById('save-progress-button').style.display = 'none';
+            }
+        }
+
+        function renderExercises() {
+            const exercisesContainer = document.getElementById('exercises-container');
+            exercisesContainer.innerHTML = ''; 
+
+            if (!dailyExercises || dailyExercises.length === 0) {
+                 if (workouts[todayWorkoutKey]) { 
+                    exercisesContainer.innerHTML = '<p class="text-gray-500">Carregando exercícios...</p>';
+                 }
+                return;
+            }
+            
+            document.getElementById('save-progress-button').style.display = 'block';
+
+            dailyExercises.forEach((exercise) => {
+                const exerciseEl = document.createElement('div');
+                exerciseEl.className = 'p-4 border border-rose-200 rounded-lg bg-white mb-3 shadow';
+                
+                let optionsHTML = '';
+                statusOptions.forEach(opt => {
+                    optionsHTML += `
+                        <label class="mr-3 inline-flex items-center">
+                            <input type="radio" name="status-${exercise.id}" value="${opt.value}" 
+                                   class="form-radio text-rose-600 focus:ring-rose-500" 
+                                   ${exercise.status === opt.value ? 'checked' : ''}
+                                   onchange="updateExerciseStatus('${exercise.id}', this.value)">
+                            <span class="ml-1 text-sm">${opt.label}</span>
+                        </label>`;
+                });
+
+                exerciseEl.innerHTML = `
+                    <h3 class="text-lg font-semibold text-rose-700">${exercise.name}</h3>
+                    <p class="text-xs text-gray-500 mb-1 italic">(${exercise.name_en || 'English name not available'})</p>
+                    <p class="text-sm text-gray-600 mb-1">${exercise.details}</p>
+                    <p class="text-xs text-gray-500 mt-1 bg-rose-50 p-2 rounded">${exercise.description_pt || 'Descrição não disponível.'}</p>
+                    <div class="mt-2 flex flex-wrap gap-y-1">
+                        ${optionsHTML}
+                    </div>
+                `;
+                exercisesContainer.appendChild(exerciseEl);
+            });
+        }
+
+        window.updateExerciseStatus = (exerciseId, newStatus) => {
+            const exercise = dailyExercises.find(ex => ex.id === exerciseId);
+            if (exercise) {
+                exercise.status = newStatus;
+                console.log(`Updated ${exerciseId} to ${newStatus}`);
+            }
+        }
+
+        async function saveProgress() {
+            if (!userId || !currentWorkoutRef) {
+                const feedbackEl = document.getElementById('feedback-message');
+                feedbackEl.textContent = "Erro: Usuário não autenticado ou treino não carregado. Tente recarregar a página.";
+                feedbackEl.className = "text-red-600 mt-2 text-sm";
+                console.error("User not authenticated or workout ref not set.");
+                return;
+            }
+            const dateString = getTodayDateString();
+            
+            const progressData = {
+                appId: appId,
+                userId: userId,
+                date: dateString,
+                workoutTitle: todayWorkoutKey,
+                exercises: dailyExercises, 
+                lastUpdated: serverTimestamp()
+            };
+
+            try {
+                await setDoc(currentWorkoutRef, progressData, { merge: true }); 
+                console.log("Progress saved for:", dateString);
+                const feedbackEl = document.getElementById('feedback-message');
+                feedbackEl.textContent = "Progresso salvo com sucesso!";
+                feedbackEl.className = "text-green-600 mt-2 text-sm";
+                setTimeout(() => feedbackEl.textContent = "", 3000);
+            } catch (error) {
+                console.error("Error saving progress:", error);
+                const feedbackEl = document.getElementById('feedback-message');
+                feedbackEl.textContent = "Erro ao salvar o progresso. Verifique sua conexão e tente novamente.";
+                feedbackEl.className = "text-red-600 mt-2 text-sm";
+                setTimeout(() => feedbackEl.textContent = "", 3000);
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            initFirebase();
+            document.getElementById('save-progress-button').addEventListener('click', saveProgress);
+        });
+
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #FFF1F2; /* rose-50 */ }
+        .container { max-width: 800px; }
+        .form-radio {
+            appearance: none;
+            border-radius: 50%;
+            width: 1em;
+            height: 1em;
+            border: 2px solid #F472B6; /* rose-400 */
+            transition: 0.2s all linear;
+            margin-right: 0.25rem; 
+            position: relative;
+            top: 0.15em;
+        }
+        .form-radio:checked {
+            border: 4px solid #E11D48; /* rose-600 */
+            background-color: #E11D48; 
+        }
+        .form-radio:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px #FBCFE8; 
+        }
+        label span { font-size: 0.875rem; } 
+    </style>
+</head>
+<body class="text-neutral-800">
+    <div class="container mx-auto p-4 sm:p-6 md:p-8">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-rose-700">Meu Treino do Dia</h1>
+            <p id="current-date" class="text-md text-neutral-600">Carregando data...</p>
+            <p id="user-id-display" class="text-xs text-neutral-500 mt-1">Carregando ID...</p>
+        </header>
+
+        <main class="bg-white p-6 rounded-lg shadow-xl">
+            <h2 id="workout-title" class="text-2xl font-semibold text-rose-600 mb-3 text-center">Carregando treino...</h2>
+            <div id="running-info" class="mb-5 text-center">
+                 </div>
+            <div id="exercises-container" class="space-y-4">
+                </div>
+            <button id="save-progress-button" class="mt-6 w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-opacity-50" style="display:none;">
+                Salvar Progresso do Dia
+            </button>
+            <p id="feedback-message" class="text-center mt-3 text-sm"></p>
+        </main>
+
+        <footer class="text-center mt-8 py-4 border-t border-rose-200">
+            <p class="text-sm text-neutral-500">&copy; 2025 Acompanhamento Diário de Treino. Para Camila.</p>
+        </footer>
+    </div>
+</body>
+</html>
